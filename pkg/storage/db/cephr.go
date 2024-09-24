@@ -93,7 +93,8 @@ func (c *cephr) Create(ctx context.Context, cephr reportsv1.ClusterEphemeralRepo
 		return err
 	}
 
-	_, err = c.db.Exec("INSERT INTO clusterephemeralreports (name, report) VALUES ($1, $2)", cephr.Name, string(jsonb))
+	_, err = c.db.Exec("INSERT INTO clusterephemeralreports (name, report) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET report = EXCLUDED.report", cephr.Name, string(jsonb))
+
 	if err != nil {
 		klog.ErrorS(err, "failed to crate cephr")
 		return fmt.Errorf("create clusterephemeralreport: %v", err)

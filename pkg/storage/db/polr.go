@@ -104,7 +104,8 @@ func (p *polrdb) Create(ctx context.Context, polr v1alpha2.PolicyReport) error {
 		return err
 	}
 
-	_, err = p.db.Exec("INSERT INTO policyreports (name, namespace, report) VALUES ($1, $2, $3)", polr.Name, polr.Namespace, string(jsonb))
+	_, err = p.db.Exec("INSERT INTO policyreports (name, namespace, report) VALUES ($1, $2, $3) ON CONFLICT (name, namespace) DO UPDATE SET report = EXCLUDED.report", polr.Name, polr.Namespace, string(jsonb))
+
 	if err != nil {
 		klog.ErrorS(err, "failed to create policy report")
 		return fmt.Errorf("create policyreport: %v", err)

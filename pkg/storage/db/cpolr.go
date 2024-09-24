@@ -93,7 +93,8 @@ func (c *cpolrdb) Create(ctx context.Context, cpolr v1alpha2.ClusterPolicyReport
 		return err
 	}
 
-	_, err = c.db.Exec("INSERT INTO clusterpolicyreports (name, report) VALUES ($1, $2)", cpolr.Name, string(jsonb))
+	_, err = c.db.Exec("INSERT INTO clusterpolicyreports (name, report) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET report = EXCLUDED.report", cpolr.Name, string(jsonb))
+
 	if err != nil {
 		klog.ErrorS(err, "failed to crate cpolr")
 		return fmt.Errorf("create clusterpolicyreport: %v", err)

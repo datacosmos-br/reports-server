@@ -103,7 +103,7 @@ func (p *ephrdb) Create(ctx context.Context, polr reportsv1.EphemeralReport) err
 		return err
 	}
 
-	_, err = p.db.Exec("INSERT INTO ephemeralreports (name, namespace, report) VALUES ($1, $2, $3)", polr.Name, polr.Namespace, string(jsonb))
+	_, err = p.db.Exec("INSERT INTO ephemeralreports (name, namespace, report) VALUES ($1, $2, $3) ON CONFLICT (name, namespace) DO UPDATE SET report = EXCLUDED.report", polr.Name, polr.Namespace, string(jsonb))
 	if err != nil {
 		klog.ErrorS(err, "failed to create ephemeral report")
 		return fmt.Errorf("create ephemeralreport: %v", err)
