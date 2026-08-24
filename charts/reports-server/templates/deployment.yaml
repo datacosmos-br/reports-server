@@ -55,6 +55,8 @@ spec:
             {{- if .Values.metrics.enabled }}
             - --authorization-always-allow-paths=/metrics
             {{- end }}
+            - -v warning
+            - --profiling false
           {{- if .Values.config.db.secretName }}
           env:
             - name: DB_HOST
