@@ -4,12 +4,16 @@ templating:
   enabled: false
 
 postgresql:
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+    tag: 16.1.0-debian-11-r22
+    digest: ""
 
   # -- Deploy postgresql dependency chart
   enabled: true
 
   auth:
-
     postgresPassword: reports
 
     database: reportsdb
@@ -22,6 +26,9 @@ fullnameOverride: ""
 
 # -- Number of pod replicas
 replicaCount: 1
+
+# -- Optional cluster name, used to easily identify database records when querying the database directly
+clusterName: ""
 
 image:
   # -- Image registry
@@ -52,16 +59,35 @@ serviceAccount:
 # -- Pod annotations
 podAnnotations: {}
 
+# -- Labels to add to resources managed by the chart
+commonLabels: {}
+
 # -- Pod security context
 podSecurityContext:
   fsGroup: 2000
+
+# -- Provide additional environment variables to the pods. Map with the same format as kubernetes deployment spec's env.
+podEnv: {}
+
+logging:
+  # -- Logging format. Permitted formats: `text`, `json`.
+  format: text
+  # -- Logging verbosity, passed to the container as `--v`. `0` keeps startup,
+  # lifecycle and error messages only. Raise to `4` to restore the per-request
+  # storage trace logs (high volume - one or more lines per report read/write).
+  verbosity: 0
+
+# -- Extra arguments passed to the container on the command line, as a map of
+# flag name to value. Rendered as `--<key>=<value>`; entries with an empty value
+# are skipped.
+extraArgs: {}
 
 # -- Container security context
 # @default -- See [values.yaml](values.yaml)
 securityContext:
   capabilities:
     drop:
-    - ALL
+      - ALL
   readOnlyRootFilesystem: true
   runAsNonRoot: true
   runAsUser: 1000
@@ -120,13 +146,13 @@ metrics:
 resources:
   # -- Container resource limits
   limits:
-    # cpu: 100m
-    # memory: 128Mi
+  # cpu: 100m
+  # memory: 128Mi
 
   # -- Container resource requests
   requests:
-    # cpu: 100m
-    # memory: 128Mi
+  # cpu: 100m
+  # memory: 128Mi
 
 autoscaling:
   # -- Enable autoscaling
@@ -138,11 +164,39 @@ autoscaling:
   # -- Max number of replicas
   maxReplicas: 100
 
-  # -- Target CPU utilisation
+  # -- Target CPU utilisation percentage
   targetCPUUtilizationPercentage: 80
 
-  # -- Target Memory utilisation
+  # -- Target memory utilization percentage
   targetMemoryUtilizationPercentage: ~
+
+  # -- Configures custom HPA metrics
+  # Ref: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+  metrics: []
+
+  # -- Configures the scaling behavior of the target in both Up and Down directions.
+  behavior: {}
+  # scaleDown:
+  #  stabilizationWindowSeconds: 300
+  #  policies:
+  #    - type: Pods
+  #      value: 1
+  #      periodSeconds: 180
+  # scaleUp:
+  #   stabilizationWindowSeconds: 300
+  #   policies:
+  #     - type: Pods
+  #       value: 2
+  #       periodSeconds: 60
+
+# -- Using a PDB is highly recommended for highly available deployments. Defaults to enabled. The default configuration doesn't prevent disruption when using a single replica
+pdb:
+  # -- Enable PodDisruptionBudget
+  enabled: true
+  # -- minAvailable pods for PDB, cannot be used together with maxUnavailable
+  minAvailable: ~
+  # -- maxUnavailable pods for PDB, will take precedence over minAvailable if both are defined
+  maxUnavailable: 50%
 
 # -- Node selector
 nodeSelector: {}
@@ -161,9 +215,13 @@ service:
   port: 443
 
 config:
+  # -- Skip database migration on startup
+  skipMigration: false
 
-  # -- Enable debug (to use inmemorydatabase)
-  debug: false
+  etcd:
+    enabled: false
+    endpoints: ~
+    insecure: true
 
   db:
     # -- If set, database connection information will be read from the Secret with this name. Overrides `db.host`, `db.name`, `db.user`, and `db.password`.
@@ -209,67 +267,23 @@ config:
     sslcert: ""
 
 apiServicesManagement:
-  # -- Create a helm hooks to install and delete api services
+  # -- Manage APIService objects for the reports-server. APIServices are anchored
+  # to the chart's ClusterRole via OwnerReferences and garbage-collected on uninstall.
   enabled: true
 
   # -- Install api services in manifest
   installApiServices:
-
     # -- Store reports in reports-server
-    enabled: false
+    enabled: true
 
     # -- Store ephemeral reports in reports-server
     installEphemeralReportsService: true
 
-  image:
-    # -- (string) Image registry
-    registry: docker.io
-    # -- Image repository
-    repository: bitnami/kubectl
-    # -- Image tag
-    # Defaults to `latest` if omitted
-    tag: '1.30.2'
-    # -- (string) Image pull policy
-    # Defaults to image.pullPolicy if omitted
-    pullPolicy: ~
+    # -- Store open reports in reports-server
+    installOpenreportsService: true
 
-  # -- Image pull secrets
-  imagePullSecrets: []
+extraObjects: []
 
-  # -- Security context for the pod
-  podSecurityContext: {}
-
-  # -- Node labels for pod assignment
-  nodeSelector: {}
-
-  # -- List of node taints to tolerate
-  tolerations: []
-
-  # -- Pod anti affinity constraints.
-  podAntiAffinity: {}
-
-  # -- Pod affinity constraints.
-  podAffinity: {}
-
-  # -- Pod labels.
-  podLabels: {}
-
-  # -- Pod annotations.
-  podAnnotations: {}
-
-  # -- Node affinity constraints.
-  nodeAffinity: {}
-
-  # -- Security context for the hook containers
-  securityContext:
-    runAsUser: 65534
-    runAsGroup: 65534
-    runAsNonRoot: true
-    privileged: false
-    allowPrivilegeEscalation: false
-    readOnlyRootFilesystem: true
-    capabilities:
-      drop:
-        - ALL
-    seccompProfile:
-      type: RuntimeDefault
+openreports:
+  # -- Deploy openreports-api CRDs
+  enabled: false

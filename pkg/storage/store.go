@@ -1,65 +1,67 @@
 package storage
 
 import (
+	"context"
+
+	reportsv1 "github.com/kyverno/kyverno/api/reports/v1"
 	"github.com/kyverno/reports-server/pkg/storage/api"
 	"github.com/kyverno/reports-server/pkg/storage/db"
-	"github.com/kyverno/reports-server/pkg/storage/inmemory"
+	"github.com/kyverno/reports-server/pkg/storage/etcd"
 	"k8s.io/klog/v2"
+	openreportsv1alpha1 "openreports.io/apis/openreports.io/v1alpha1"
+	"sigs.k8s.io/wg-policy-prototypes/policy-report/pkg/api/wgpolicyk8s.io/v1alpha2"
 )
 
-type Interface interface {
-	api.Versioning
-	api.Storage
-}
+func New(embedded bool, config *db.PostgresConfig, etcdCfg *etcd.EtcdConfig, clusterUID string, clusterName string) (api.Storage, error) {
+	klog.Infof("setting up storage, embedded-db=%v, etcdconfig=%+v", embedded, etcdCfg)
+	var storage api.Storage
+	var err error
 
-func New(debug bool, config *db.PostgresConfig) (Interface, error) {
-	klog.Infof("setting up storage, debug=%v", debug)
-	if debug {
-		return &store{
-			db:         inmemory.New(),
-			versioning: NewVersioning(),
-		}, nil
+	if embedded {
+		storage, err = etcd.New(etcdCfg)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		storage, err = db.New(config, clusterUID, clusterName)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	db, err := db.New(config)
-	if err != nil {
-		return nil, err
-	}
 	return &store{
-		db:         db,
-		versioning: NewVersioning(),
+		db: storage,
 	}, nil
 }
 
 type store struct {
-	db         api.Storage
-	versioning api.Versioning
+	db api.Storage
 }
 
-func (s *store) ClusterEphemeralReports() api.ClusterEphemeralReportsInterface {
-	return s.db.ClusterEphemeralReports()
-}
-
-func (s *store) ClusterPolicyReports() api.ClusterPolicyReportsInterface {
-	return s.db.ClusterPolicyReports()
-}
-
-func (s *store) EphemeralReports() api.EphemeralReportsInterface {
-	return s.db.EphemeralReports()
-}
-
-func (s *store) PolicyReports() api.PolicyReportsInterface {
+func (s *store) PolicyReports() api.GenericIface[*v1alpha2.PolicyReport] {
 	return s.db.PolicyReports()
 }
 
-func (s *store) Ready() bool {
-	return s.db.Ready()
+func (s *store) ClusterPolicyReports() api.GenericClusterIface[*v1alpha2.ClusterPolicyReport] {
+	return s.db.ClusterPolicyReports()
 }
 
-func (s *store) SetResourceVersion(val string) error {
-	return s.versioning.SetResourceVersion(val)
+func (s *store) EphemeralReports() api.GenericIface[*reportsv1.EphemeralReport] {
+	return s.db.EphemeralReports()
 }
 
-func (s *store) UseResourceVersion() string {
-	return s.versioning.UseResourceVersion()
+func (s *store) ClusterEphemeralReports() api.GenericClusterIface[*reportsv1.ClusterEphemeralReport] {
+	return s.db.ClusterEphemeralReports()
+}
+
+func (s *store) Reports() api.GenericIface[*openreportsv1alpha1.Report] {
+	return s.db.Reports()
+}
+
+func (s *store) ClusterReports() api.GenericClusterIface[*openreportsv1alpha1.ClusterReport] {
+	return s.db.ClusterReports()
+}
+
+func (s *store) Ready(ctx context.Context) bool {
+	return s.db.Ready(ctx)
 }

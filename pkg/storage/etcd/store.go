@@ -1,0 +1,234 @@
+package etcd
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
+
+	"github.com/kyverno/reports-server/pkg/storage/api"
+	"github.com/kyverno/reports-server/pkg/storage/versioning"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/klog/v2"
+)
+
+type objectStoreNamespaced[T metav1.Object] struct {
+	sync.Mutex
+	*versioning.ResourceVersion
+	namespaced bool
+	etcdclient clientv3.KV
+	gvk        schema.GroupVersionKind
+	gr         schema.GroupResource
+}
+
+// etcdRevision returns the etcd store revision from a Get response, guarding
+// against a nil response or header so it is safe to log unconditionally.
+func etcdRevision(resp *clientv3.GetResponse) int64 {
+	if resp == nil || resp.Header == nil {
+		return 0
+	}
+	return resp.Header.Revision
+}
+
+func NewObjectStoreNamespaced[T metav1.Object](client clientv3.KV, gvk schema.GroupVersionKind, gr schema.GroupResource) api.GenericIface[T] {
+	return &objectStoreNamespaced[T]{
+		ResourceVersion: versioning.NewVersioning(),
+		namespaced:      true,
+		etcdclient:      client,
+		gvk:             gvk,
+		gr:              gr,
+	}
+}
+
+func (o *objectStoreNamespaced[T]) getPrefix(namespace string) string {
+	if len(namespace) != 0 {
+		return fmt.Sprintf("%s/%s/%s/%s/", o.gvk.Group, o.gvk.Version, o.gvk.Kind, namespace)
+	}
+	return fmt.Sprintf("%s/%s/%s/", o.gvk.Group, o.gvk.Version, o.gvk.Kind)
+}
+
+func (o *objectStoreNamespaced[T]) getKey(name, namespace string) string {
+	return fmt.Sprintf("%s%s", o.getPrefix(namespace), name)
+}
+
+func (o *objectStoreNamespaced[T]) Get(ctx context.Context, name, namespace string) (T, error) {
+	o.Lock()
+	defer o.Unlock()
+
+	var obj T
+	key := o.getKey(name, namespace)
+	resp, err := o.etcdclient.Get(ctx, key)
+	if err != nil {
+		klog.ErrorS(err, "failed to get report kind=%s", o.gvk.String())
+		return obj, err
+	}
+	klog.V(4).InfoS("etcd get response", "kind", o.gvk.String(), "key", key, "kvs", len(resp.Kvs), "revision", etcdRevision(resp))
+	if len(resp.Kvs) != 1 {
+		return obj, errors.NewNotFound(o.gr, key)
+	}
+	err = json.Unmarshal(resp.Kvs[0].Value, &obj)
+	if err != nil {
+		klog.ErrorS(err, "failed to marshal report kind=%s", o.gvk.String())
+		return obj, errors.NewNotFound(o.gr, key)
+	}
+	return obj, nil
+}
+
+func (o *objectStoreNamespaced[T]) List(ctx context.Context, namespace string) ([]T, error) {
+	o.Lock()
+	defer o.Unlock()
+
+	key := o.getPrefix(namespace)
+	resp, err := o.etcdclient.Get(ctx, key, clientv3.WithPrefix())
+	if err != nil {
+		klog.ErrorS(err, "failed to list report kind=%s", o.gvk.String())
+		return nil, err
+	}
+	klog.V(4).InfoS("etcd list response", "kind", o.gvk.String(), "prefix", key, "kvs", len(resp.Kvs), "revision", etcdRevision(resp))
+	if len(resp.Kvs) == 0 {
+		return nil, nil
+	}
+	objects := make([]T, 0, len(resp.Kvs))
+	for _, v := range resp.Kvs {
+		var obj T
+		err = json.Unmarshal(v.Value, &obj)
+		if err != nil {
+			return objects, errors.NewNotFound(o.gr, key)
+		}
+		objects = append(objects, obj)
+	}
+	return objects, nil
+}
+
+func (o *objectStoreNamespaced[T]) Create(ctx context.Context, obj T) error {
+	o.Lock()
+	defer o.Unlock()
+
+	key := o.getKey(obj.GetName(), obj.GetNamespace())
+	resp, err := o.etcdclient.Get(ctx, key)
+	if err != nil {
+		klog.ErrorS(err, "failed to create report kind=%s", o.gvk.String())
+		return err
+	}
+	klog.V(4).InfoS("etcd create precheck response", "kind", o.gvk.String(), "key", key, "kvs", len(resp.Kvs), "revision", etcdRevision(resp))
+	if len(resp.Kvs) > 0 {
+		return errors.NewAlreadyExists(o.gr, key)
+	}
+
+	bObject, err := json.Marshal(obj)
+	if err != nil {
+		return err
+	}
+
+	_, err = o.etcdclient.Put(ctx, key, string(bObject))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (o *objectStoreNamespaced[T]) Update(ctx context.Context, obj T) error {
+	o.Lock()
+	defer o.Unlock()
+
+	key := o.getKey(obj.GetName(), obj.GetNamespace())
+	resp, err := o.etcdclient.Get(ctx, key)
+	if err != nil {
+		klog.ErrorS(err, "failed to update report kind=%s", o.gvk.String())
+		return err
+	}
+	if len(resp.Kvs) != 1 {
+		return errors.NewNotFound(o.gr, key)
+	}
+
+	bObject, err := json.Marshal(obj)
+	if err != nil {
+		return err
+	}
+
+	_, err = o.etcdclient.Put(ctx, key, string(bObject))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (o *objectStoreNamespaced[T]) Delete(ctx context.Context, name, namespace string) error {
+	o.Lock()
+	defer o.Unlock()
+
+	key := o.getKey(name, namespace)
+	resp, err := o.etcdclient.Delete(ctx, key)
+	if err != nil {
+		klog.ErrorS(err, "failed to delete report kind=%s", o.gvk.String())
+		return err
+	}
+	if resp.Deleted == 0 {
+		return errors.NewNotFound(o.gr, key)
+	}
+
+	return nil
+}
+
+func (o *objectStoreNamespaced[T]) Count(ctx context.Context) (int, error) {
+	return 0, fmt.Errorf("count not implemented for etcd objectStoreNamespaced")
+}
+
+type ObjectStorageCluster[T metav1.Object] interface {
+	Get(ctx context.Context, name string) (T, error)
+	List(ctx context.Context) ([]T, error)
+	Create(ctx context.Context, obj T) error
+	Update(ctx context.Context, obj T) error
+	Delete(ctx context.Context, name string) error
+}
+
+type objectStoreCluster[T metav1.Object] struct {
+	store api.GenericIface[T]
+}
+
+func NewObjectStoreCluster[T metav1.Object](client clientv3.KV, gvk schema.GroupVersionKind, gr schema.GroupResource) api.GenericClusterIface[T] {
+	return &objectStoreCluster[T]{
+		store: &objectStoreNamespaced[T]{
+			ResourceVersion: versioning.NewVersioning(),
+			namespaced:      false,
+			etcdclient:      client,
+			gvk:             gvk,
+			gr:              gr,
+		},
+	}
+}
+
+func (o *objectStoreCluster[T]) Get(ctx context.Context, name string) (T, error) {
+	return o.store.Get(ctx, name, "")
+}
+
+func (o *objectStoreCluster[T]) List(ctx context.Context) ([]T, error) {
+	return o.store.List(ctx, "")
+}
+
+func (o *objectStoreCluster[T]) Create(ctx context.Context, obj T) error {
+	return o.store.Create(ctx, obj)
+}
+
+func (o *objectStoreCluster[T]) Update(ctx context.Context, obj T) error {
+	return o.store.Update(ctx, obj)
+}
+
+func (o *objectStoreCluster[T]) Delete(ctx context.Context, name string) error {
+	return o.store.Delete(ctx, name, "")
+}
+
+func (o *objectStoreCluster[T]) Count(ctx context.Context) (int, error) {
+	return o.store.Count(ctx)
+}
+
+func (o *objectStoreCluster[T]) SetResourceVersion(val string) error {
+	return o.store.SetResourceVersion(val)
+}
+
+func (o *objectStoreCluster[T]) UseResourceVersion() string {
+	return o.store.UseResourceVersion()
+}
