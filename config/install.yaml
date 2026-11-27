@@ -4,6 +4,23 @@ kind: Namespace
 metadata:
   name: reports-server
 ---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: reports-server
+  namespace: reports-server
+  labels:
+    helm.sh/chart: reports-server-0.1.7
+    app.kubernetes.io/name: reports-server
+    app.kubernetes.io/instance: reports-server
+    app.kubernetes.io/version: "v0.1.7"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reports-server
+  maxUnavailable: 50%
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -23,10 +40,10 @@ metadata:
   name: reports-server
   namespace: reports-server
   labels:
-    helm.sh/chart: reports-server-0.1.1
+    helm.sh/chart: reports-server-0.1.7
     app.kubernetes.io/name: reports-server
     app.kubernetes.io/instance: reports-server
-    app.kubernetes.io/version: "v0.1.1"
+    app.kubernetes.io/version: "v0.1.7"
     app.kubernetes.io/managed-by: Helm
 ---
 apiVersion: v1
@@ -51,12 +68,10 @@ metadata:
   name: reports-server
   labels:
     rbac.authorization.k8s.io/aggregate-to-admin: 'true'
-    rbac.authorization.k8s.io/aggregate-to-edit: 'true'
-    rbac.authorization.k8s.io/aggregate-to-view: 'true'
-    helm.sh/chart: reports-server-0.1.1
+    helm.sh/chart: reports-server-0.1.7
     app.kubernetes.io/name: reports-server
     app.kubernetes.io/instance: reports-server
-    app.kubernetes.io/version: "v0.1.1"
+    app.kubernetes.io/version: "v0.1.7"
     app.kubernetes.io/managed-by: Helm
 rules:
 - apiGroups:
@@ -73,6 +88,20 @@ rules:
     - update
     - watch
     - deletecollection
+- apiGroups:
+    - "coordination.k8s.io"
+  resources:
+    - "leases"
+  verbs:
+    - "create"
+    - "get"
+    - "update"
+- apiGroups:
+    - ""
+  resources:
+    - namespaces
+  verbs:
+    - get
 - apiGroups:
     - apiregistration.k8s.io
   resources:
@@ -91,6 +120,7 @@ rules:
   resourceNames:
     - v1.reports.kyverno.io
     - v1alpha2.wgpolicyk8s.io
+    - v1alpha1.openreports.io
 - apiGroups:
     - wgpolicyk8s.io
   resources:
@@ -98,6 +128,22 @@ rules:
     - policyreports/status
     - clusterpolicyreports
     - clusterpolicyreports/status
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+    - deletecollection
+- apiGroups:
+    - openreports.io
+  resources:
+    - reports
+    - reports/status
+    - clusterreports
+    - clusterreports/status
   verbs:
     - create
     - delete
@@ -121,16 +167,24 @@ rules:
     - subjectaccessreviews
   verbs:
     - create
+- apiGroups:
+    - rbac.authorization.k8s.io
+  resources:
+    - clusterroles
+  verbs:
+    - get
+  resourceNames:
+    - reports-server
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: reports-server
   labels:
-    helm.sh/chart: reports-server-0.1.1
+    helm.sh/chart: reports-server-0.1.7
     app.kubernetes.io/name: reports-server
     app.kubernetes.io/instance: reports-server
-    app.kubernetes.io/version: "v0.1.1"
+    app.kubernetes.io/version: "v0.1.7"
     app.kubernetes.io/managed-by: Helm
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -147,10 +201,10 @@ metadata:
   name: reports-server
   namespace: reports-server
   labels:
-    helm.sh/chart: reports-server-0.1.1
+    helm.sh/chart: reports-server-0.1.7
     app.kubernetes.io/name: reports-server
     app.kubernetes.io/instance: reports-server
-    app.kubernetes.io/version: "v0.1.1"
+    app.kubernetes.io/version: "v0.1.7"
     app.kubernetes.io/managed-by: Helm
 rules:
 - apiGroups:
@@ -167,10 +221,10 @@ metadata:
   name: reports-server
   namespace: kube-system
   labels:
-    helm.sh/chart: reports-server-0.1.1
+    helm.sh/chart: reports-server-0.1.7
     app.kubernetes.io/name: reports-server
     app.kubernetes.io/instance: reports-server
-    app.kubernetes.io/version: "v0.1.1"
+    app.kubernetes.io/version: "v0.1.7"
     app.kubernetes.io/managed-by: Helm
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -187,10 +241,10 @@ metadata:
   name: reports-server
   namespace: reports-server
   labels:
-    helm.sh/chart: reports-server-0.1.1
+    helm.sh/chart: reports-server-0.1.7
     app.kubernetes.io/name: reports-server
     app.kubernetes.io/instance: reports-server
-    app.kubernetes.io/version: "v0.1.1"
+    app.kubernetes.io/version: "v0.1.7"
     app.kubernetes.io/managed-by: Helm
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -263,13 +317,36 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
+  name: reports-server-headless
+  namespace: reports-server
+  labels:
+    helm.sh/chart: reports-server-0.1.7
+    app.kubernetes.io/name: reports-server
+    app.kubernetes.io/instance: reports-server
+    app.kubernetes.io/version: "v0.1.7"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - name: https
+    port: 443
+    protocol: TCP
+    targetPort: https
+  selector:
+    app.kubernetes.io/name: reports-server
+    app.kubernetes.io/instance: reports-server
+---
+apiVersion: v1
+kind: Service
+metadata:
   name: reports-server
   namespace: reports-server
   labels:
-    helm.sh/chart: reports-server-0.1.1
+    helm.sh/chart: reports-server-0.1.7
     app.kubernetes.io/name: reports-server
     app.kubernetes.io/instance: reports-server
-    app.kubernetes.io/version: "v0.1.1"
+    app.kubernetes.io/version: "v0.1.7"
     app.kubernetes.io/managed-by: Helm
 spec:
   type: ClusterIP
@@ -288,10 +365,10 @@ metadata:
   name: reports-server
   namespace: reports-server
   labels:
-    helm.sh/chart: reports-server-0.1.1
+    helm.sh/chart: reports-server-0.1.7
     app.kubernetes.io/name: reports-server
     app.kubernetes.io/instance: reports-server
-    app.kubernetes.io/version: "v0.1.1"
+    app.kubernetes.io/version: "v0.1.7"
     app.kubernetes.io/managed-by: Helm
 spec:
   strategy:
@@ -305,8 +382,11 @@ spec:
   template:
     metadata:
       labels:
+        helm.sh/chart: reports-server-0.1.7
         app.kubernetes.io/name: reports-server
         app.kubernetes.io/instance: reports-server
+        app.kubernetes.io/version: "v0.1.7"
+        app.kubernetes.io/managed-by: Helm
     spec:
       priorityClassName: system-cluster-critical
       serviceAccountName: reports-server
@@ -315,18 +395,44 @@ spec:
       containers:
         - name: reports-server
           args:
-            - --dbhost=reports-server-postgresql.reports-server
-            - --dbport=5432
-            - --dbuser=postgres
-            - --dbpassword=reports
-            - --dbname=reportsdb
             - --dbsslmode=disable
             - --dbsslrootcert=
             - --dbsslkey=
             - --dbsslcert=
+            - --servicename=reports-server
+            - --servicens=reports-server
+            - --clusterrolename=reports-server
+            - --storereports=true
+            - --storeephemeralreports=true
+            - --storeopenreports=true
             - --cert-dir=/tmp
             - --secure-port=4443
             - --authorization-always-allow-paths=/metrics
+            - --clustername=
+            - --v=0
+            - --logging-format=text
+          env:
+            - name: GOMEMLIMIT
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.memory
+                  divisor: '1'
+            - name: DB_HOST
+              value: "reports-server-postgresql.reports-server"
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_DATABASE
+              value: "reportsdb"
+            - name: DB_USER
+              value: "postgres"
+            - name: DB_PASSWORD
+              value: "reports"
+            - name: HEADLESS_SERVICE
+              value: reports-server-headless.reports-server.svc.cluster.local
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -338,15 +444,15 @@ spec:
             runAsUser: 1000
             seccompProfile:
               type: RuntimeDefault
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp-dir
           image: "ghcr.io/kyverno/reports-server:latest"
           imagePullPolicy: IfNotPresent
           ports:
             - name: https
               containerPort: 4443
               protocol: TCP
-          volumeMounts:
-            - mountPath: /tmp
-              name: tmp-dir
           livenessProbe:
             failureThreshold: 10
             httpGet:
@@ -431,7 +537,7 @@ spec:
       hostIPC: false
       containers:
         - name: postgresql
-          image: docker.io/bitnami/postgresql:16.1.0-debian-11-r22
+          image: docker.io/bitnamilegacy/postgresql:16.1.0-debian-11-r22
           imagePullPolicy: "IfNotPresent"
           securityContext:
             allowPrivilegeEscalation: false
@@ -512,7 +618,6 @@ spec:
                 - -e
                 - |
                   exec pg_isready -U "postgres" -d "dbname=reportsdb" -h 127.0.0.1 -p 5432
-                  [ -f /opt/bitnami/postgresql/tmp/.initialized ] || [ -f /bitnami/postgresql/.initialized ]
           resources:
             limits: {}
             requests:
@@ -538,51 +643,3 @@ spec:
         resources:
           requests:
             storage: "8Gi"
----
-apiVersion: apiregistration.k8s.io/v1
-kind: APIService
-metadata:
-  name: v1alpha2.wgpolicyk8s.io
-  namespace: reports-server
-  labels:
-    helm.sh/chart: reports-server-0.1.1
-    app.kubernetes.io/name: reports-server
-    app.kubernetes.io/instance: reports-server
-    app.kubernetes.io/version: "v0.1.1"
-    app.kubernetes.io/managed-by: Helm
-    kube-aggregator.kubernetes.io/automanaged: "false"
-  annotations:
-    helm.sh/hook: post-install
-spec:
-  group: wgpolicyk8s.io
-  groupPriorityMinimum: 100
-  insecureSkipTLSVerify: true
-  service:
-    name: reports-server
-    namespace: reports-server
-  version: v1alpha2
-  versionPriority: 100
----
-apiVersion: apiregistration.k8s.io/v1
-kind: APIService
-metadata:
-  name: v1.reports.kyverno.io
-  namespace: reports-server
-  labels:
-    helm.sh/chart: reports-server-0.1.1
-    app.kubernetes.io/name: reports-server
-    app.kubernetes.io/instance: reports-server
-    app.kubernetes.io/version: "v0.1.1"
-    app.kubernetes.io/managed-by: Helm
-    kube-aggregator.kubernetes.io/automanaged: "false"
-  annotations:
-    helm.sh/hook: post-install
-spec:
-  group: reports.kyverno.io
-  groupPriorityMinimum: 100
-  insecureSkipTLSVerify: true
-  service:
-    name: reports-server
-    namespace: reports-server
-  version: v1
-  versionPriority: 100

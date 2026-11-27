@@ -7,7 +7,7 @@ import (
 	"strconv"
 
 	reportsv1 "github.com/kyverno/kyverno/api/reports/v1"
-	"github.com/kyverno/reports-server/pkg/storage"
+	storageapi "github.com/kyverno/reports-server/pkg/storage/api"
 	"github.com/kyverno/reports-server/pkg/utils"
 	errorpkg "github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -25,10 +25,10 @@ import (
 
 type ephrStore struct {
 	broadcaster *watch.Broadcaster
-	store       storage.Interface
+	store       storageapi.GenericIface[*reportsv1.EphemeralReport]
 }
 
-func EphemeralReportStore(store storage.Interface) API {
+func EphemeralReportStore(store storageapi.GenericIface[*reportsv1.EphemeralReport]) API {
 	broadcaster := watch.NewBroadcaster(1000, watch.WaitIfChannelFull)
 
 	return &ephrStore{
@@ -54,26 +54,18 @@ func (p *ephrStore) NewList() runtime.Object {
 
 func (p *ephrStore) List(ctx context.Context, options *metainternalversion.ListOptions) (runtime.Object, error) {
 	var labelSelector labels.Selector
-	// fieldSelector := fields.Everything() // TODO: Field selectors
 	if options != nil {
 		if options.LabelSelector != nil {
 			labelSelector = options.LabelSelector
 		}
-		// if options.FieldSelector != nil {
-		// 	fieldSelector = options.FieldSelector
-		// }
 	}
 	namespace := genericapirequest.NamespaceValue(ctx)
 
 	klog.Infof("listing ephemeral reports for namespace=%s", namespace)
-	list, err := p.listEphr(namespace)
+	list, err := p.listEphr(ctx, namespace)
 	if err != nil {
 		return nil, errors.NewBadRequest("failed to list resource ephemeralreport")
 	}
-
-	// if labelSelector == labels.Everything() {
-	// 	return list, nil
-	// }
 
 	ephrList := &reportsv1.EphemeralReportList{
 		Items:    make([]reportsv1.EphemeralReport, 0),
@@ -111,7 +103,7 @@ func (p *ephrStore) Get(ctx context.Context, name string, options *metav1.GetOpt
 	namespace := genericapirequest.NamespaceValue(ctx)
 
 	klog.Infof("getting ephemeral reports name=%s namespace=%s", name, namespace)
-	report, err := p.getEphr(name, namespace)
+	report, err := p.getEphr(ctx, name, namespace)
 	if err != nil || report == nil {
 		return nil, errors.NewNotFound(utils.EphemeralReportsGR, name)
 	}
@@ -126,10 +118,6 @@ func (p *ephrStore) Create(ctx context.Context, obj runtime.Object, createValida
 		switch options.FieldValidation {
 		case "Ignore":
 		case "Warn":
-			// return &admissionv1.AdmissionResponse{
-			// 	Allowed:  false,
-			// 	Warnings: []string{err.Error()},
-			// }, nil
 		case "Strict":
 			return nil, err
 		}
@@ -156,7 +144,7 @@ func (p *ephrStore) Create(ctx context.Context, obj runtime.Object, createValida
 	ephr.Generation = 1
 	klog.Infof("creating ephemeral reports name=%s namespace=%s", ephr.Name, ephr.Namespace)
 	if !isDryRun {
-		r, err := p.createEphr(ephr)
+		r, err := p.createEphr(ctx, ephr)
 		if err != nil {
 			return nil, errors.NewAlreadyExists(utils.EphemeralReportsGR, ephr.Name)
 		}
@@ -172,7 +160,7 @@ func (p *ephrStore) Update(ctx context.Context, name string, objInfo rest.Update
 	isDryRun := slices.Contains(options.DryRun, "All")
 	namespace := genericapirequest.NamespaceValue(ctx)
 
-	oldObj, err := p.getEphr(name, namespace)
+	oldObj, err := p.getEphr(ctx, name, namespace)
 	if err != nil && !forceAllowCreate {
 		return nil, false, err
 	}
@@ -184,7 +172,7 @@ func (p *ephrStore) Update(ctx context.Context, name string, objInfo rest.Update
 	ephr := updatedObject.(*reportsv1.EphemeralReport)
 
 	if forceAllowCreate {
-		r, err := p.updateEphr(ephr, oldObj)
+		r, err := p.updateEphr(ctx, ephr, oldObj)
 		if err != nil {
 			klog.ErrorS(err, "failed to update resource")
 		}
@@ -199,10 +187,6 @@ func (p *ephrStore) Update(ctx context.Context, name string, objInfo rest.Update
 		switch options.FieldValidation {
 		case "Ignore":
 		case "Warn":
-			// return &admissionv1.AdmissionResponse{
-			// 	Allowed:  false,
-			// 	Warnings: []string{err.Error()},
-			// }, nil
 		case "Strict":
 			return nil, false, err
 		}
@@ -221,7 +205,7 @@ func (p *ephrStore) Update(ctx context.Context, name string, objInfo rest.Update
 	ephr.Generation += 1
 	klog.Infof("updating ephemeral reports name=%s namespace=%s", ephr.Name, ephr.Namespace)
 	if !isDryRun {
-		r, err := p.updateEphr(ephr, oldObj)
+		r, err := p.updateEphr(ctx, ephr, oldObj)
 		if err != nil {
 			return nil, false, errors.NewBadRequest(fmt.Sprintf("cannot create ephemeral report: %s", err.Error()))
 		}
@@ -237,7 +221,7 @@ func (p *ephrStore) Delete(ctx context.Context, name string, deleteValidation re
 	isDryRun := slices.Contains(options.DryRun, "All")
 	namespace := genericapirequest.NamespaceValue(ctx)
 
-	ephr, err := p.getEphr(name, namespace)
+	ephr, err := p.getEphr(ctx, name, namespace)
 	if err != nil {
 		klog.ErrorS(err, "Failed to find ephrs", "name", name, "namespace", klog.KRef("", namespace))
 		return nil, false, errors.NewNotFound(utils.EphemeralReportsGR, name)
@@ -251,7 +235,7 @@ func (p *ephrStore) Delete(ctx context.Context, name string, deleteValidation re
 
 	klog.Infof("deleting ephemeral reports name=%s namespace=%s", ephr.Name, ephr.Namespace)
 	if !isDryRun {
-		err = p.deleteEphr(ephr)
+		err = p.deleteEphr(ctx, ephr)
 		if err != nil {
 			klog.ErrorS(err, "failed to delete ephr", "name", name, "namespace", klog.KRef("", namespace))
 			return nil, false, errors.NewBadRequest(fmt.Sprintf("failed to delete ephemeralreport: %s", err.Error()))
@@ -261,7 +245,7 @@ func (p *ephrStore) Delete(ctx context.Context, name string, deleteValidation re
 		}
 	}
 
-	return ephr, true, nil // TODO: Add protobuf
+	return ephr, true, nil
 }
 
 func (p *ephrStore) DeleteCollection(ctx context.Context, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions, listOptions *metainternalversion.ListOptions) (runtime.Object, error) {
@@ -350,42 +334,43 @@ func (p *ephrStore) ShortNames() []string {
 	return []string{"ephr"}
 }
 
-func (p *ephrStore) getEphr(name, namespace string) (*reportsv1.EphemeralReport, error) {
-	val, err := p.store.EphemeralReports().Get(context.TODO(), name, namespace)
+func (p *ephrStore) getEphr(ctx context.Context, name, namespace string) (*reportsv1.EphemeralReport, error) {
+	val, err := p.store.Get(ctx, name, namespace)
 	if err != nil {
 		return nil, errorpkg.Wrapf(err, "could not find ephemeral report in store")
 	}
-
-	return val.DeepCopy(), nil
+	return val, nil
 }
 
-func (p *ephrStore) listEphr(namespace string) (*reportsv1.EphemeralReportList, error) {
-	valList, err := p.store.EphemeralReports().List(context.TODO(), namespace)
+func (p *ephrStore) listEphr(ctx context.Context, namespace string) (*reportsv1.EphemeralReportList, error) {
+	valList, err := p.store.List(ctx, namespace)
 	if err != nil {
 		return nil, errorpkg.Wrapf(err, "could not find ephemeral report in store")
 	}
 
 	reportList := &reportsv1.EphemeralReportList{
-		Items: valList,
+		Items: make([]reportsv1.EphemeralReport, 0, len(valList)),
+	}
+	for _, v := range valList {
+		reportList.Items = append(reportList.Items, *v.DeepCopy())
 	}
 
 	klog.Infof("value found of length:%d", len(reportList.Items))
 	return reportList, nil
 }
 
-func (p *ephrStore) createEphr(report *reportsv1.EphemeralReport) (*reportsv1.EphemeralReport, error) {
+func (p *ephrStore) createEphr(ctx context.Context, report *reportsv1.EphemeralReport) (*reportsv1.EphemeralReport, error) {
 	report.ResourceVersion = p.store.UseResourceVersion()
 	report.UID = uuid.NewUUID()
 	report.CreationTimestamp = metav1.Now()
-
-	return report, p.store.EphemeralReports().Create(context.TODO(), *report)
+	return report, p.store.Create(ctx, report)
 }
 
-func (p *ephrStore) updateEphr(report *reportsv1.EphemeralReport, _ *reportsv1.EphemeralReport) (*reportsv1.EphemeralReport, error) {
+func (p *ephrStore) updateEphr(ctx context.Context, report *reportsv1.EphemeralReport, _ *reportsv1.EphemeralReport) (*reportsv1.EphemeralReport, error) {
 	report.ResourceVersion = p.store.UseResourceVersion()
-	return report, p.store.EphemeralReports().Update(context.TODO(), *report)
+	return report, p.store.Update(ctx, report)
 }
 
-func (p *ephrStore) deleteEphr(report *reportsv1.EphemeralReport) error {
-	return p.store.EphemeralReports().Delete(context.TODO(), report.Name, report.Namespace)
+func (p *ephrStore) deleteEphr(ctx context.Context, report *reportsv1.EphemeralReport) error {
+	return p.store.Delete(ctx, report.Name, report.Namespace)
 }

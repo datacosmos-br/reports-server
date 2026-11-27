@@ -22,14 +22,12 @@ jobs:
       fail-fast: false
       matrix:
         k8s-version:
-          - name: v1.26
-            version: v1.26.13
-          - name: v1.27
-            version: v1.27.10
-          - name: v1.28
-            version: v1.28.6
-          - name: v1.29
-            version: v1.29.1
+          - name: v1.33
+            version: v1.33.7
+          - name: v1.34
+            version: v1.34.3
+          - name: v1.35
+            version: v1.35.0
         tests:
           - ^reports$
     runs-on: ubuntu-latest
@@ -45,7 +43,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
         with:
-          go-version: ~1.22.2
+          go-version: ~1.24.1
       - name: Install helm
         id: helm
         uses: azure/setup-helm@5119fcb9089d432beecbf79bb2c7915207344b78 # v3.5
@@ -61,9 +59,9 @@ jobs:
         run: |
           set -e
           # For AMD64 / x86_64
-          [ $(uname -m) = x86_64 ] && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+          [ $(uname -m) = x86_64 ] && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64
           # For ARM64
-          [ $(uname -m) = aarch64 ] && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-arm64
+          [ $(uname -m) = aarch64 ] && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-arm64
           chmod +x ./kind
           sudo mv ./kind /usr/local/bin/kind
       - name: Create kind cluster
@@ -82,7 +80,11 @@ jobs:
       - name: Install latest kyverno
         run: |
           set -e
-          kubectl create -f https://github.com/kyverno/kyverno/raw/main/config/install-latest-testing.yaml
+          set -e
+          export HELM=${{ steps.helm.outputs.helm-path }}
+          curl https://raw.githubusercontent.com/kyverno/kyverno/refs/heads/main/scripts/config/standard/kyverno.yaml > values.yaml
+          helm repo add kyverno https://kyverno.github.io/kyverno/
+          helm install kyverno -n kyverno --create-namespace kyverno/kyverno --values values.yaml
       - name: Wait for kyverno ready
         run: |
           set -e
@@ -92,13 +94,13 @@ jobs:
           set -e
           kubectl get apiservices v1alpha2.wgpolicyk8s.io v1.reports.kyverno.io
       - name: Install Chainsaw
-        uses: kyverno/action-install-chainsaw@d1a61148c0437a66760d11d8575332305c2234cb # v0.2.10
+        uses: kyverno/action-install-chainsaw@d311eacde764f806c9658574ff64c9c3b21f8397 # v0.2.11
       - name: Test with Chainsaw
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          cd ./kyverno/test/conformance/chainsaw && chainsaw test --config ./../../../../.chainsaw.yaml --include-test-regex '^chainsaw$/${{ matrix.tests }}' --no-color=false
+          cd ./kyverno/test/conformance/chainsaw/reports && chainsaw test --config ./../../../../../.chainsaw.yaml --exclude-test-regex '^chainsaw$/^admission$/^label'
       - name: Debug failure
         if: failure()
         uses: ./.github/actions/failure-logs

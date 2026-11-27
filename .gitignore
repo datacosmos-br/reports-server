@@ -1,6 +1,7 @@
 /_output
 /reports-server
 .cover
+__debug_*
 
 # Vim-related files
 [._]*.s[a-w][a-z]
@@ -13,3 +14,4 @@ Session.vim
 *manifest-tool
 .gopath
 .tools
+.DS_Store

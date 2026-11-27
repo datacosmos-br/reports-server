@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/kyverno/reports-server/pkg/storage"
+	storageapi "github.com/kyverno/reports-server/pkg/storage/api"
 	"github.com/kyverno/reports-server/pkg/utils"
 	errorpkg "github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -25,10 +25,10 @@ import (
 
 type polrStore struct {
 	broadcaster *watch.Broadcaster
-	store       storage.Interface
+	store       storageapi.GenericIface[*v1alpha2.PolicyReport]
 }
 
-func PolicyReportStore(store storage.Interface) API {
+func PolicyReportStore(store storageapi.GenericIface[*v1alpha2.PolicyReport]) API {
 	broadcaster := watch.NewBroadcaster(1000, watch.WaitIfChannelFull)
 
 	return &polrStore{
@@ -54,26 +54,18 @@ func (p *polrStore) NewList() runtime.Object {
 
 func (p *polrStore) List(ctx context.Context, options *metainternalversion.ListOptions) (runtime.Object, error) {
 	var labelSelector labels.Selector
-	// fieldSelector := fields.Everything() // TODO: Field selectors
 	if options != nil {
 		if options.LabelSelector != nil {
 			labelSelector = options.LabelSelector
 		}
-		// if options.FieldSelector != nil {
-		// 	fieldSelector = options.FieldSelector
-		// }
 	}
 	namespace := genericapirequest.NamespaceValue(ctx)
 
 	klog.Infof("listing policy reports for namespace=%s", namespace)
-	list, err := p.listPolr(namespace)
+	list, err := p.listPolr(ctx, namespace)
 	if err != nil {
 		return nil, errors.NewBadRequest("failed to list resource policyreport")
 	}
-
-	// if labelSelector == labels.Everything() {
-	// 	return list, nil
-	// }
 
 	polrList := &v1alpha2.PolicyReportList{
 		Items:    make([]v1alpha2.PolicyReport, 0),
@@ -111,7 +103,7 @@ func (p *polrStore) Get(ctx context.Context, name string, options *metav1.GetOpt
 	namespace := genericapirequest.NamespaceValue(ctx)
 
 	klog.Infof("getting policy reports name=%s namespace=%s", name, namespace)
-	report, err := p.getPolr(name, namespace)
+	report, err := p.getPolr(ctx, name, namespace)
 	if err != nil || report == nil {
 		return nil, errors.NewNotFound(utils.PolicyReportsGR, name)
 	}
@@ -126,10 +118,6 @@ func (p *polrStore) Create(ctx context.Context, obj runtime.Object, createValida
 		switch options.FieldValidation {
 		case "Ignore":
 		case "Warn":
-			// return &admissionv1.AdmissionResponse{
-			// 	Allowed:  false,
-			// 	Warnings: []string{err.Error()},
-			// }, nil
 		case "Strict":
 			return nil, err
 		}
@@ -156,7 +144,7 @@ func (p *polrStore) Create(ctx context.Context, obj runtime.Object, createValida
 	polr.Generation = 1
 	klog.Infof("creating policy reports name=%s namespace=%s", polr.Name, polr.Namespace)
 	if !isDryRun {
-		r, err := p.createPolr(polr)
+		r, err := p.createPolr(ctx, polr)
 		if err != nil {
 			return nil, errors.NewAlreadyExists(utils.PolicyReportsGR, polr.Name)
 		}
@@ -172,7 +160,7 @@ func (p *polrStore) Update(ctx context.Context, name string, objInfo rest.Update
 	isDryRun := slices.Contains(options.DryRun, "All")
 	namespace := genericapirequest.NamespaceValue(ctx)
 
-	oldObj, err := p.getPolr(name, namespace)
+	oldObj, err := p.getPolr(ctx, name, namespace)
 	if err != nil && !forceAllowCreate {
 		return nil, false, err
 	}
@@ -184,7 +172,7 @@ func (p *polrStore) Update(ctx context.Context, name string, objInfo rest.Update
 	polr := updatedObject.(*v1alpha2.PolicyReport)
 
 	if forceAllowCreate {
-		r, err := p.updatePolr(polr, oldObj)
+		r, err := p.updatePolr(ctx, polr, oldObj)
 		if err != nil {
 			klog.ErrorS(err, "failed to update resource")
 		}
@@ -199,10 +187,6 @@ func (p *polrStore) Update(ctx context.Context, name string, objInfo rest.Update
 		switch options.FieldValidation {
 		case "Ignore":
 		case "Warn":
-			// return &admissionv1.AdmissionResponse{
-			// 	Allowed:  false,
-			// 	Warnings: []string{err.Error()},
-			// }, nil
 		case "Strict":
 			return nil, false, err
 		}
@@ -221,7 +205,7 @@ func (p *polrStore) Update(ctx context.Context, name string, objInfo rest.Update
 	polr.Generation += 1
 	klog.Infof("updating policy reports name=%s namespace=%s", polr.Name, polr.Namespace)
 	if !isDryRun {
-		r, err := p.updatePolr(polr, oldObj)
+		r, err := p.updatePolr(ctx, polr, oldObj)
 		if err != nil {
 			return nil, false, errors.NewBadRequest(fmt.Sprintf("cannot create policy report: %s", err.Error()))
 		}
@@ -237,7 +221,7 @@ func (p *polrStore) Delete(ctx context.Context, name string, deleteValidation re
 	isDryRun := slices.Contains(options.DryRun, "All")
 	namespace := genericapirequest.NamespaceValue(ctx)
 
-	polr, err := p.getPolr(name, namespace)
+	polr, err := p.getPolr(ctx, name, namespace)
 	if err != nil {
 		klog.ErrorS(err, "Failed to find polrs", "name", name, "namespace", klog.KRef("", namespace))
 		return nil, false, errors.NewNotFound(utils.PolicyReportsGR, name)
@@ -251,7 +235,7 @@ func (p *polrStore) Delete(ctx context.Context, name string, deleteValidation re
 
 	klog.Infof("deleting policy reports name=%s namespace=%s", polr.Name, polr.Namespace)
 	if !isDryRun {
-		err = p.deletePolr(polr)
+		err = p.deletePolr(ctx, polr)
 		if err != nil {
 			klog.ErrorS(err, "failed to delete polr", "name", name, "namespace", klog.KRef("", namespace))
 			return nil, false, errors.NewBadRequest(fmt.Sprintf("failed to delete policyreport: %s", err.Error()))
@@ -261,7 +245,7 @@ func (p *polrStore) Delete(ctx context.Context, name string, deleteValidation re
 		}
 	}
 
-	return polr, true, nil // TODO: Add protobuf in wgpolicygroup
+	return polr, true, nil
 }
 
 func (p *polrStore) DeleteCollection(ctx context.Context, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions, listOptions *metainternalversion.ListOptions) (runtime.Object, error) {
@@ -350,42 +334,43 @@ func (p *polrStore) ShortNames() []string {
 	return []string{"polr"}
 }
 
-func (p *polrStore) getPolr(name, namespace string) (*v1alpha2.PolicyReport, error) {
-	val, err := p.store.PolicyReports().Get(context.TODO(), name, namespace)
+func (p *polrStore) getPolr(ctx context.Context, name, namespace string) (*v1alpha2.PolicyReport, error) {
+	val, err := p.store.Get(ctx, name, namespace)
 	if err != nil {
 		return nil, errorpkg.Wrapf(err, "could not find policy report in store")
 	}
-
-	return val.DeepCopy(), nil
+	return val, nil
 }
 
-func (p *polrStore) listPolr(namespace string) (*v1alpha2.PolicyReportList, error) {
-	valList, err := p.store.PolicyReports().List(context.TODO(), namespace)
+func (p *polrStore) listPolr(ctx context.Context, namespace string) (*v1alpha2.PolicyReportList, error) {
+	valList, err := p.store.List(ctx, namespace)
 	if err != nil {
 		return nil, errorpkg.Wrapf(err, "could not find policy report in store")
 	}
 
 	reportList := &v1alpha2.PolicyReportList{
-		Items: valList,
+		Items: make([]v1alpha2.PolicyReport, 0, len(valList)),
+	}
+	for _, v := range valList {
+		reportList.Items = append(reportList.Items, *v.DeepCopy())
 	}
 
 	klog.Infof("value found of length:%d", len(reportList.Items))
 	return reportList, nil
 }
 
-func (p *polrStore) createPolr(report *v1alpha2.PolicyReport) (*v1alpha2.PolicyReport, error) {
+func (p *polrStore) createPolr(ctx context.Context, report *v1alpha2.PolicyReport) (*v1alpha2.PolicyReport, error) {
 	report.ResourceVersion = p.store.UseResourceVersion()
 	report.UID = uuid.NewUUID()
 	report.CreationTimestamp = metav1.Now()
-
-	return report, p.store.PolicyReports().Create(context.TODO(), *report)
+	return report, p.store.Create(ctx, report)
 }
 
-func (p *polrStore) updatePolr(report *v1alpha2.PolicyReport, _ *v1alpha2.PolicyReport) (*v1alpha2.PolicyReport, error) {
+func (p *polrStore) updatePolr(ctx context.Context, report *v1alpha2.PolicyReport, _ *v1alpha2.PolicyReport) (*v1alpha2.PolicyReport, error) {
 	report.ResourceVersion = p.store.UseResourceVersion()
-	return report, p.store.PolicyReports().Update(context.TODO(), *report)
+	return report, p.store.Update(ctx, report)
 }
 
-func (p *polrStore) deletePolr(report *v1alpha2.PolicyReport) error {
-	return p.store.PolicyReports().Delete(context.TODO(), report.Name, report.Namespace)
+func (p *polrStore) deletePolr(ctx context.Context, report *v1alpha2.PolicyReport) error {
+	return p.store.Delete(ctx, report.Name, report.Namespace)
 }

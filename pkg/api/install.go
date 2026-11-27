@@ -16,7 +16,7 @@ package api
 
 import (
 	reportsv1 "github.com/kyverno/kyverno/api/reports/v1"
-	"github.com/kyverno/reports-server/pkg/storage"
+	"github.com/kyverno/reports-server/pkg/storage/api"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -24,24 +24,30 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
+	openreportsv1alpha1 "openreports.io/apis/openreports.io/v1alpha1"
 	"sigs.k8s.io/wg-policy-prototypes/policy-report/pkg/api/wgpolicyk8s.io/v1alpha2"
 )
 
 var (
 	// Scheme contains the types needed by the resource API.
-	Scheme = runtime.NewScheme()
+	Scheme = newScheme()
 	// Codecs is a codec factory for serving the resource API.
 	Codecs = serializer.NewCodecFactory(Scheme)
 )
 
-func init() {
-	utilruntime.Must(installWgPolicyTypesInternal(Scheme))
-	utilruntime.Must(v1alpha2.AddToScheme(Scheme))
-	utilruntime.Must(Scheme.SetVersionPriority(v1alpha2.SchemeGroupVersion))
-	metav1.AddToGroupVersion(Scheme, schema.GroupVersion{Version: "v1"})
+func newScheme() *runtime.Scheme {
+	s := runtime.NewScheme()
+	utilruntime.Must(installWgPolicyTypesInternal(s))
+	utilruntime.Must(v1alpha2.AddToScheme(s))
+	utilruntime.Must(s.SetVersionPriority(v1alpha2.SchemeGroupVersion))
+	metav1.AddToGroupVersion(s, schema.GroupVersion{Version: "v1"})
 
-	utilruntime.Must(reportsv1.Install(Scheme))
-	utilruntime.Must(Scheme.SetVersionPriority(reportsv1.SchemeGroupVersion))
+	utilruntime.Must(reportsv1.Install(s))
+	utilruntime.Must(s.SetVersionPriority(reportsv1.SchemeGroupVersion))
+	// openreports
+	utilruntime.Must(openreportsv1alpha1.AddToScheme(s))
+	utilruntime.Must(s.SetVersionPriority(openreportsv1alpha1.SchemeGroupVersion))
+	return s
 }
 
 // BuildPolicyReports constructs APIGroupInfo the wgpolicyk8s.io API group using the given getters.
@@ -70,10 +76,24 @@ func BuildEphemeralReports(ephr, cephr rest.Storage) genericapiserver.APIGroupIn
 	return apiGroupInfo
 }
 
-// Install builds the reports for the wgpolicyk8s.io and reports.kyverno.io API, and then installs it into the given API reports-server.
-func Install(store storage.Interface, server *genericapiserver.GenericAPIServer) error {
-	polr := PolicyReportStore(store)
-	cpolr := ClusterPolicyReportStore(store)
+// BuildOpenreports constructs APIGroupInfo the openreports.io API group using the given getters.
+func BuildOpenreports(rep, crep rest.Storage) genericapiserver.APIGroupInfo {
+	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(openreportsv1alpha1.SchemeGroupVersion.Group, Scheme, metav1.ParameterCodec, Codecs)
+	orStorage := map[string]rest.Storage{
+		"reports":        rep,
+		"clusterreports": crep,
+	}
+	apiGroupInfo.VersionedResourcesStorageMap[openreportsv1alpha1.SchemeGroupVersion.Version] = orStorage
+	apiGroupInfo.NegotiatedSerializer = DefaultSubsetNegotiatedSerializer(Codecs)
+
+	return apiGroupInfo
+}
+
+// Install builds the reports for the wgpolicyk8s.io, openreports.io and reports.kyverno.io API, and then installs it into the given API reports-server.
+func Install(store api.Storage, server *genericapiserver.GenericAPIServer) error {
+	// wgpolicy
+	polr := PolicyReportStore(store.PolicyReports())
+	cpolr := ClusterPolicyReportStore(store.ClusterPolicyReports())
 
 	polrInfo := BuildPolicyReports(polr, cpolr)
 	err := server.InstallAPIGroup(&polrInfo)
@@ -81,8 +101,19 @@ func Install(store storage.Interface, server *genericapiserver.GenericAPIServer)
 		return err
 	}
 
-	ephr := EphemeralReportStore(store)
-	cephr := ClusterEphemeralReportStore(store)
+	// // openreports
+	orReport := ReportStore(store.Reports())
+	orClusterReport := ClusterReportStore(store.ClusterReports())
+
+	orInfo := BuildOpenreports(orReport, orClusterReport)
+	err = server.InstallAPIGroup(&orInfo)
+	if err != nil {
+		return err
+	}
+
+	// ephemeral reports
+	ephr := EphemeralReportStore(store.EphemeralReports())
+	cephr := ClusterEphemeralReportStore(store.ClusterEphemeralReports())
 
 	ephrInfo := BuildEphemeralReports(ephr, cephr)
 	err = server.InstallAPIGroup(&ephrInfo)
